@@ -1,0 +1,337 @@
+---
+title: "Henderson_Assign12and13"
+author: "Jesse Henderson"
+date: "4/16/2021"
+output: html_document
+---
+
+```{r}
+setwd("E:/GEOG 4870/Assignment_12and13")
+knitr::opts_knit$set(root.dir = "E:/GEOG 4870/Assignment_12and13")
+library(sf) 
+library(raster)
+library(here)
+library(mapview)
+library(ggpubr)
+library(rgdal)
+library(RColorBrewer)
+library(caret) 
+library(dplyr)
+library(rpart) 
+library(rpart.plot)
+```
+
+
+```{r}
+#loading sample points into R
+sampling.points.sf<-st_read(here("E:/GEOG 4870/Assignment_12and13/PhData","sample_points.shp"))
+#plotting the points on mapview leaflet
+#mapview(sampling.points.sf) commenting this out because it doesn't like to be knitted to an html
+crs(sampling.points.sf)
+```
+
+
+```{r}
+#Load all of the independent variables that will eventually become stacked rasters and the variables used for regression and fit. 
+AACN<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","AACN.tif"))
+crs(AACN) #check projections
+AACN 
+
+#below is loading all the rasters the same way the AACN raster is loaded. Their projections and extent should be the same. I checked above with each different raster name. 
+Elevation<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","Elevation.tif"))
+Hillshading<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","Hillshading.tif"))
+MidSlope<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","MidSlopePosition.tif"))
+MRVBF<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","MRVBF.tif"))
+NDVI<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","NDVI.tif"))
+Slope<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","Slope.tif"))
+TWI<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","TWI.tif"))
+LandsatBand<-raster(here("E:/GEOG 4870/Assignment_12and13/PhData","LandsatBand.tif"))
+
+#mapview(sampling.points.sf, zcol="pH60_100cm") again any mapview element is going to be commented out.
+#mapview(TWI)+mapview(sampling.points.sf)
+```
+
+```{r}
+#creating a raster stack. This is placing all of the rasters loaded in above into one stack. This is the step where it is important to have the extent and coordinate systems all line up otherwise the stack wouldn't be possible. 
+hunterCovariates<-stack(AACN, Elevation, Hillshading, MidSlope, MRVBF, NDVI, Slope, TWI, LandsatBand)
+plot(hunterCovariates)
+names(hunterCovariates)
+
+#this step is creating values at each of the sampling points for each raster because they are stacked in the hunterCovariates variable. 
+DSM_data <- extract(hunterCovariates, sampling.points.sf, sp = 1, method = "simple")
+DSM_data <- as.data.frame(DSM_data)
+str(DSM_data)
+
+#this is just taking the names of each raster layer and assigning it to a new variable. 
+dropvar<-names(hunterCovariates)
+
+#this is creating a function where the variable plot uses the names for each and separates them into individual pdf generations. The function runs for each raster at the same time and outputs a pdf for each different raster. The output pdf's are then placed in the specified file within our path which is the PhData/Plots in my working directory. 
+for (varplot in dropvar){
+  scatter<-ggscatter(DSM_data, x = varplot, y = "pH60_100cm", 
+            add = "reg.line", conf.int = TRUE, 
+            cor.coef = TRUE, cor.method = "pearson",
+            xlab = varplot, ylab = "Observed ph", title="Correlation plot")
+  ggexport(scatter, filename = here("PhData/Plots",paste0(varplot,"_pH60_100cm","_Correlation_plot.pdf")))
+}
+```
+
+
+
+```{r}
+#this step is creating  a linear regression with combining all of the rasters together. 
+hv.MLR.Full <- lm(pH60_100cm ~  + AACN + LandsatBand +
+                    Elevation + Hillshading +  MidSlopePosition + MRVBF +
+                    NDVI + TWI + Slope, data = DSM_data)
+#the summary stats of this linear regression model come back with a pearson R value of 0.24 which shows very slight positive correlation. The std. error all seem to be okay and don't show any unfit statistical evidence. 
+summary(hv.MLR.Full)
+```
+
+```{r}
+#set seed creates a random generation
+set.seed(123)
+#this function takes a random sample of 70 percent of the total DSM_data data frame.
+training <- sample(nrow(DSM_data), 0.7 * nrow(DSM_data)) 
+training
+
+#this is a regression model of the training set only. so the 70 percent of the total. 
+hv.MLR.rh <- lm(pH60_100cm ~ AACN + LandsatBand + Elevation + Hillshading +
+                  MidSlopePosition + MRVBF + NDVI + TWI, data = DSM_data[training, ])
+
+#this is a new set with just the training data values. Then taking the predictions and creating a new column within that set. 
+Training.set<-DSM_data[training, ] 
+Training.set$hv.pred.rhC<- predict(hv.MLR.rh, DSM_data[training, ])
+
+
+#creating a scatter plot with the training set data. X axis is the pH values, y axis is the predicted values. Adding a regression line, confidence interval, correlation coefficient, and using the pearson method. Bottom is just labels and titles. 
+ggscatter(Training.set, x = "pH60_100cm", y = "hv.pred.rhC", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Observed", ylab = "Predicted", title="Soil Ph - Goodness of Fit - Training")
+
+#this is using the other 30 percent to validate the training data. 
+Validation.set<-DSM_data[-training, ]
+
+#adding the prediction to the 30 percent validation set. 
+Validation.set$hv.pred.rhV<-predict(hv.MLR.rh, DSM_data[-training, ]) 
+
+#same plot as above just with the validation set. 
+ggscatter(Validation.set, x = "pH60_100cm", y = "hv.pred.rhV", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "pearson",
+          xlab = "Observed", ylab = "Predicted", title="Soil Ph - Goodness of Fit - Validation")
+```
+
+
+```{r}
+#creating spatial prediciton box
+par(mfrow = c(1, 3))
+
+#lower and upper bound of confidence intervals. 
+predfun <- function(model, data) {
+  v <- predict(model, data, interval = "prediction", level = 0.9)
+}
+
+map.MLR.r.1ow <- predict(hunterCovariates, hv.MLR.rh, "soilPh_60_100_MLR_low.tif",
+                         fun = predfun, index = 2, format = "GTiff", datatype = "FLT4S", overwrite = TRUE)
+plot(map.MLR.r.1ow, main = "MLR predicted soil pH (60-100cm) lower limit")
+map.MLR.r.pred <- predict(hunterCovariates, hv.MLR.rh, "soilPh_60_100_MLR_pred.tif",
+                          fun = predfun, index = 1, format = "GTiff", datatype = "FLT4S", overwrite = TRUE)
+plot(map.MLR.r.pred, main = "MLR predicted soil pH (60-100cm)")
+map.MLR.r.up <- predict(hunterCovariates, hv.MLR.rh, "soilPh_60_100_MLR_up.tif",
+                        fun = predfun, index = 3, format = "GTiff", datatype = "FLT4S", overwrite = TRUE)
+plot(map.MLR.r.up, main = "MLR predicted soil pH (60-100cm) upper limit")
+
+#mapview of combined points and prediction regression model. 
+#mapview(map.MLR.r.pred)+mapview(sampling.points.sf, zcol="pH60_100cm")
+
+
+#creating a tif file for the regression raster prediction. Outputted to my working directory. 
+if (require(rgdal)) {RGB( writeRaster(map.MLR.r.pred, filename="Henderson_prediction_raster.tif", datatype="INT4U", options="TFW=YES", format="GTiff",overwrite=TRUE))}
+```
+
+```{r}
+#read all the tif files in. 
+DEM<-raster(here("Tiffs/DEM.tif"))
+EVIMODIS<-raster(here("Tiffs/EVIMODIS.tif"))
+NDVIMODIS<-raster(here("Tiffs/NDVIMODIS.tif")) 
+NIRMODIS<-raster(here("Tiffs/NIRMODIS.tif")) 
+REDMODIS<-raster(here("Tiffs/REDMODIS.tif")) 
+NLCD<-raster(here("Tiffs/NLCD.tif"))
+
+#check raster attribute table
+NLCD 
+NLCD<-ratify(NLCD) #create an attribute table for the raster, then add descriptions to the table. 
+levels(NLCD)[[1]]$class<-c("Barren","Deciduous_Forest",
+                           "Evergreen_Forest","Mixed_Forest",
+                           "Shrubs","Herbaceous")
+
+NLCD #check now if the attribute table is populated.
+levels(NLCD) 
+
+#create a palette for the NLCD. 
+my_palette <- brewer.pal(n = 6, name = "Dark2")
+#mapview(NLCD, col.regions = my_palette, att = "class")
+```
+
+
+```{r}
+#unsupervised clustering. 
+
+nr <- getValues(NDVIMODIS)
+str(nr)
+
+#set a random seed. 
+set.seed(99)
+
+#6 clusters, 500 iterations, starting at 5 random sets using the Lloyd method. 
+kmncluster <- kmeans(na.omit(nr), centers = 6, iter.max = 500, nstart = 5, algorithm="Lloyd")
+
+#look at the tables. 
+str(kmncluster)
+
+#rasterize the NDVIMODIS layer. 
+knr <- raster(NDVIMODIS)
+values(knr) <- kmncluster$cluster #assign new values to the knr above. 
+knr
+
+#new raster table
+knr<-ratify(knr) 
+levels(knr)[[1]]$class<-LETTERS[1:6]#adding classes from 1-6 that are letters instead of numbers. 
+levels(knr)
+#mapview(knr, col.regions = my_palette,att = "class")
+
+#raster stacking 3 of them. 
+stack.unsuper<-stack(EVIMODIS, NIRMODIS, REDMODIS)
+plot(stack.unsuper)
+#mapview(stack.unsuper)
+nr2 <- getValues(stack.unsuper) #converting to matrix
+str(nr2)
+
+
+set.seed(99)
+#same thing as above with new stack. 
+kmncluster2 <- kmeans(na.omit(nr2), centers = 6, iter.max = 500, nstart = 5, algorithm="Lloyd")
+
+#view it
+str(kmncluster2)
+
+#rasterize the NDVIMODIS
+knr2 <- raster(NDVIMODIS) 
+values(knr2) <- kmncluster2$cluster #take the values and add them to a column in the new raster attribute table. 
+knr2
+
+knr2<-ratify(knr2) # prepare the rat raster attribute table
+levels(knr2)[[1]]$class<-LETTERS[1:6] # add a new attribute that will coded using letters A - F
+levels(knr2)
+#mapview(knr2, col.regions = my_palette,att = "class")
+
+
+if (require(rgdal)) {RGB( writeRaster(knr2, filename="Henderson_unsupervised.tif", datatype="INT4U", options="TFW=YES", format="GTiff",overwrite=TRUE))}
+
+```
+
+```{r}
+#supervised classification
+
+DEM[DEM == -9999]<-NA
+EVIMODIS[EVIMODIS == -9999]<-NA
+NDVIMODIS[NDVIMODIS == -9999]<-NA
+NIRMODIS[NIRMODIS == -9999]<-NA
+REDMODIS[REDMODIS == -9999]<-NA
+#NLCD[NLCD == -9999]<- NA
+
+# Generate the training/validation sites locations
+# Set the random number generator to reproduce the results
+set.seed(99)
+# Sampling
+samp2011 <- sampleStratified(NLCD, size = 50, na.rm = TRUE, sp = TRUE)
+samp2011
+# Number of samples in each class
+table(samp2011$NLCD)
+
+# Convert to sf for easy map viewing
+sampleNLCD<-st_as_sf(samp2011) 
+#mapview(sampleNLCD, zcol="NLCD") + mapview(NLCD, col.regions = my_palette, att = "class")
+
+### create a stack with available raster layers
+stack.MMap<-stack(DEM, EVIMODIS, NDVIMODIS,
+                  NIRMODIS,REDMODIS) # Here we are using ALL available layers
+
+# Extract the layer values for the locations
+sampvals <- extract(stack.MMap, samp2011, df = TRUE)
+# sampvals no longer has the spatial information. 
+# To keep the spatial information you use `sp=TRUE` argument in the `extract` function.
+# drop the ID column so that we only keep spectral + DEM information
+sampvals <- sampvals[, -1]
+# combine the class information with extracted values
+sampdata <- data.frame(classvalue = samp2011@data$NLCD, sampvals)
+sampdata
+
+########################################################
+####### Train the model ################################
+cart <- rpart(as.factor(classvalue)~., data=sampdata, method = 'class', minsplit = 5)
+### We can fit the model using ALL layers as we are doing here or just a 
+### subset of the layers like we did for the regression model
+# print(model.class)
+# Plot the trained classification tree
+plot(cart, uniform=TRUE, main="Classification Tree")
+text(cart, cex = 0.5)
+
+
+########################################################
+####### Geospatial Predictions #########################
+# Now predict the subset data based on the model; prediction for entire area takes longer time
+pr2011 <- predict(stack.MMap, cart, type='class',na.rm=TRUE)
+pr2011
+# Do some carpentry for easy viewing
+pr2011<-ratify(pr2011)
+levels(pr2011)[[1]]$class<-c("Barren","Deciduous_Forest",
+                           "Evergreen_Forest","Mixed_Forest",
+                           "Shrubs","Herbaceous")
+levels(pr2011)
+
+#mapview(pr2011, col.regions = my_palette, att = "class")
+# Compare with original map
+#mapview(NLCD, col.regions = my_palette, att = "class")+
+  #mapview(pr2011, col.regions = my_palette, att = "class")
+
+########################################################
+####### Validation #####################################
+# confusion matrix (training data)
+conf.matrix <- table(sampdata$classvalue, predict(cart,type="class"))
+rownames(conf.matrix) <- paste("Actual", rownames(conf.matrix), sep = ":")
+
+
+colnames(conf.matrix) <- paste("Pred", colnames(conf.matrix), sep = ":")
+print(conf.matrix)
+
+## Using package caret
+cm<-confusionMatrix(as.factor(sampdata$classvalue), 
+                    as.factor(predict(cart,type="class")))
+
+# Get statistics
+cm
+
+
+## Get areas
+## Original NLCD
+as.data.frame(NLCD) %>%
+  group_by(class) %>%
+  tally() %>%
+  mutate(area = (n * res(NLCD)[1] * res(NLCD)[2])/10000)
+
+## Our classification
+as.data.frame(pr2011) %>%
+  group_by(class) %>%
+  tally() %>%
+  mutate(area = (n * res(pr2011)[1] * res(pr2011)[2])/10000)
+
+
+mycolor <- c("#fef65b","#ff0000", "#daa520","#0000ff","#0000ff","#00ff00")
+par(mfrow = c(1,2))
+plot(NDVIMODIS, col = rev(terrain.colors(10)), main = 'MODIS-NDVI')
+plot(knr, main = 'Unsupervised classification', col = mycolor )
+
+
+if (require(rgdal)) {RGB( writeRaster(pr2011, filename="Henderson_supervised.tif", datatype="INT4U", options="TFW=YES", format="GTiff",overwrite=TRUE))}
+```

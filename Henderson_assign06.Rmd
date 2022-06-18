@@ -1,0 +1,191 @@
+---
+title: 'Henderson_Assign06'
+author: "Jesse Henderson"
+date: "02/24/2021"
+output: html_document
+---
+
+### Instructions
+
+**For each question below, show code.**  Once you've completed things, don't forget to to upload this document (knitted version please!) to CANVAS. 
+
+A few tips:
+
+* Don't forget to knit your document frequently!
+* Don't forget to `install.packages()` and load them using `library()`.
+* Don't forget to use `?` or `help()` if you're unsure about a function
+* **EXPLAIN WHAT YOUR RESULTS MEAN!**  Think about the numbers and visualizations and explain, in words, what they mean.
+* Make sure you label all axes and legends and add a title to your plots and maps.
+
+**23 points total**
+
+So far we have been working with **thematic maps** in class (eg choropleth maps). These maps show the distribution of a single attribute in space (or relationships among several attributes), and are used for display or analysis. In this assignment we will create **reference maps**, these maps are used to display the location of features, and are often used for navigation. A great example of reference maps (and one that you might already be familiar with) are [US National Park Service (NPS) Maps](https://www.nps.gov/carto/app/#!/parks). 
+
+**In this assignment you will work with data from the [NPS GIS Portal](https://public-nps.opendata.arcgis.com/) to create three reference maps for a national park of your choice. Maps in R are infinitely customizable, the goal of this assignment is for you to explore different map themes and aesthetics to get a feel for map customization. You may use `ggplot2`, `tmap`, or any other R mapping package to create your maps.**
+
+### Set-up (5 points)
+
+**2. Set your working directory below and load all of the packages you will need for creating your maps.**
+
+```{r}
+#setup
+setwd("E:/GEOG 4870")
+knitr::opts_knit$set(root.dir = "E:/GEOG 4870")
+library("ggspatial")
+library(tidyverse)
+theme_set(theme_bw()) #use the bw theme for all ggplot maps
+library(sf)
+library(sp)
+library(tmap)
+library(mapview)
+library(leaflet)
+library(ggplot2)
+library("rnaturalearth")
+library(rgeos)
+library(ggmap)
+
+#all data in this assignment for the maps comes from the national park service open gis data source. 
+```
+
+2. Now you will need to download and import your data. I have provided you with a shapefile of NPS park boundaries but you will need to download some additional shape files to create your reference maps. You can find all available shapefiles for a park by searching for the park name on the [NPS Data Portal](https://public-nps.opendata.arcgis.com/). For instance the search below will produce all the available files for Canyonlands National Park:
+
+
+**You must use 2 additional shapefiles for your maps. One of these shapefiles should be a line feature (eg trails) the other shapefile should be a point feature (eg points of interest).**
+
+**Import all of your shapefiles into `R`, check their projections. Reproject your shapefiles if you need to.**
+
+```{r}
+#reading canyon lands shapefile
+c_lands <- st_read("E:/GEOG 4870/c_lands","NPS_-_Land_Resources_Division_Boundary_and_Tract_Data_Service")
+
+#reprojecting to NAD83
+c_lands_sf <- st_transform(c_lands, 4269)
+
+#reading roads in canyon lands shapefile
+c_roads <- st_read("E:/GEOG 4870/c_roads","Roads")
+
+#reprojecting to NAD83
+c_roads_sf <- st_transform(c_roads, 4269)
+
+#reading campsites in canyon lands shapefile
+c_campsites <- st_read("E:/GEOG 4870/c_campsites","Campsites")
+
+#reprojecting to NAD83
+c_campsites_sf <- st_transform(c_campsites, 4269)
+
+#reading trails in canyon lands shapefile
+c_trails <- st_read("E:/GEOG 4870/c_trails","Trails")
+
+#reprojecting to NAD83
+c_trails_sf <- st_transform(c_trails, 4269)
+
+#I checked each shapefile and even if it was NAD83, I used the transform function to make sure each one was. 
+```
+
+### Map 1: Park Reference Map (5 points)
+
+**3. Create a reference map for the full extent of the park. This map must include the park boundary and at least two additional shapefiles from the [NPS Data Portal](https://public-nps.opendata.arcgis.com/). One of these shapefiles should be a line feature (eg trails) the other shape file should be a point feature (eg points of interest). Your map should also include a title, legend, scale bar, and north arrow.** Hint: If you are using tmap, the elements `tm_lines` and `tm_symbols` allow you to add point and line features to your map.
+
+```{r, warning=FALSE}
+#filtering the national park dataset down to only canyonlands so it is easier to work with in the plot instead of having to specify box boundaries. This way I don't have to do that and it will create a box of the 3 plotted shapefiles automatically. I can shift it if I want too, but this way it is already set up to not have to be moved. 
+c_lands_sf2 <- c_lands_sf %>% 
+  filter(PARKNAME == "Canyonlands")
+
+ 
+ggplot() +
+  geom_sf(data = c_lands_sf2, aes(fill = "Canyonlands")) + #using aesthetic fill to create polygon shapefile in legend.
+  geom_sf(data = c_roads_sf, aes(colour = "Roads"), show.legend = "line") + #using aesthetic fill to create line shapefile and using show.legend to specify the vector type in the legend. 
+  geom_sf(data = c_campsites_sf, aes(colour = "Campsites"), show.legend = "point") + #using aesthetic fill to create a point shapfile and using show.legend to specify vector type in the legend. 
+  scale_fill_manual(values = c("Canyonlands" = "azure3"), #without these the legend will add all 3 vector types to each legend piece, this specifies that only the polygon will be shown for boundaries. 
+                    guide = guide_legend(override.aes = list(linetype = "blank", shape = NA))) + 
+  scale_colour_manual(values = c("Roads" = "black", "Campsites" = "firebrick3"), #this manually changes the colors of the legend and then converts them to the correct vector type in the legend. 
+                    guide = guide_legend(override.aes = list(linetype = c("blank","solid"), shape = c(16, NA)))) +    
+  xlab("Longitude") + #x label
+  ylab("Latitude") + #y label 
+  ggtitle("Canyonlands National Park") + #title
+  annotation_north_arrow(location = "bl", which_north = "true", #adding north arrow to bottom left.
+        pad_x = unit(0.05, "in"), pad_y = unit(0.05, "in"),
+        height = unit(0.4, "in"), width = unit(0.25, "in"),
+        style = north_arrow_orienteering) +
+  annotation_scale(location = "tr", width_hint = 0.25) + #adding scale to top right. 
+  labs(fill = "Park Boundary") + #changing legend titles.
+  labs(colour = "Roads/Campsites") +
+  theme(plot.title = element_text(hjust = 0.5)) #centering title.
+
+
+```
+
+### Map 2: Site Reference Map (5 points)
+
+**4. Create a reference map for a specific site in the park. This could be your favorite trail, a specific camp ground, a point of interest, or any other park location that you want to highlight. Make sure that you choose a bounding box for your map with an extent that fully contains the site that you are highlighting. Your site map should include at least 2 point, line, or polygon features that highlight important site characteristics. For instance if you were creating a map of Old Faithful, you could highlight the geyser location and the trail system surrounding the geyser, you might also show the nearby lodge. Your map should also include text labels highlighting key features (eg Old Faithful), a title, legend, scale bar, and north arrow.**  
+
+```{r, warning=FALSE}
+#filtering down the campsites to 3, I ended up only using 1 of them in the view. Also filtering down the trails, I ended up using just devils kitchen.
+c_campsites_sf2 <- c_campsites_sf %>% 
+  filter(NAME == c("CP3","CP1","CP2"))
+c_trails_sf2 <- c_trails_sf %>%
+  filter(TRLNAME == c("Devils Kitchen Trail", "Druid Arch Trail"))
+
+ggplot() +
+  geom_sf(data = c_campsites_sf2, aes(colour = "Campsites"), show.legend = "point") + #using aesthetic to fill campsites and show.legend for point vector data. 
+  geom_sf(data = c_trails_sf2, aes(colour = "Trails"), show.legend = "line") + #using aesthetic to fill trails and show.legend for line vector data. 
+  scale_colour_manual(values = c("Trails" = "black", "Campsites" = "firebrick3"),  #this manually changes the colors of the legend and then converts them to the correct vector type in the legend.
+                    guide = guide_legend(override.aes = list(linetype = c("blank","solid"), shape = c(16, NA)))) +
+  labs(colour = "Key") + #naming legend
+  xlab("Longitude") + #x label
+  ylab("Latitude") + #y label
+  ggtitle("Devils Kitchen Trails/Campsite CP3") + #title
+  theme(plot.title = element_text(hjust = 0.5)) + #centering title
+    annotation_north_arrow(location = "bl", which_north = "true", #adding north arrow to the plot.
+        pad_x = unit(0.05, "in"), pad_y = unit(0.05, "in"),
+        height = unit(0.4, "in"), width = unit(0.25, "in"),
+        style = north_arrow_orienteering) +
+  annotation_scale(location = "tl", width_hint = 0.25) + #this is the code for annotations. 
+  annotate(geom = "text", x = -109.84687844962716, y = 38.105951339721594, label = "CP3 Campsite", 
+      fontface = "italic", color = "black", size = 3) +
+  annotate(geom = "text", x = -109.86087844962716, y = 38.115951339721594, label = "Devils Kitchen Trail", 
+      fontface = "italic", color = "black", size = 3)
+#would like to add a basemap to this but have no idea how to in ggplot. Something like a DEM or a contour map of elevation. Just something to ground the map to the data. This is just coordinates on a plot doesn't mean a ton without seeing the scenery. The frustrating thing is I can do all of this in Arc but much faster and much easier and the end result is cleaner. 
+```
+
+### Map 3: Interactive Map (5 points)
+
+**5. Convert your park reference map (Map 1) to an interactive map using `tmap`, `mapview`, or `leaflet`. This map does not need to include a legend compass, scale bar, or title.** 
+
+```{r, warning=FALSE}
+#interactive map view using leaflet.
+leaflet(c_lands_sf2)%>%
+  addTiles() %>% #adding the map
+  addMarkers(data = c_campsites_sf, lat = , lng = ) %>% #adding the points from the campsites
+  addPolylines(data = c_roads_sf, lat = , lng = ) %>% #adding the roads
+  addPolygons(data = c_lands_sf2, lat = , lng = ) %>% #adding the park boundary
+  addMiniMap() #bottom corner map
+```
+
+## 3. Reflection (3 points)
+
+When conducting data analysis, you as a researcher not only have to demonstrate your technical skills but consider your choices and their impacts. Reflecting on data analysis helps you document your process, what worked, what didn't, and how you might improve. At the end of each class assignment you will asked to write a sort reflection. 
+
+For this reflection keep in mind the principles of feminist data visualization 
+
+* Rethink binaries
+* Embrace Pluralism
+* Examine power and aspire to empower
+* Consider context and subjectivity
+* Represent uncertainty
+* Legitimize embodiment and affect
+* Make labor visible
+
+and please respond to the the following prompts:
+
+**1. How did you choose the symbology for your maps?**
+
+I used the base ggplot symbology as it effective for visualizing data in a non-discriminatory way. It plots the information exactly how the user sets it to plot. As far as the colors go, I used colors I felt represented the data in a realistic and effective way and that colorblind people could view easily. 
+
+**3. Have a look at the [NPS map symbol library](https://www.nps.gov/maps/tools/symbol-library/) choose one symbol and describe how you would re-draw or re-label the symbol. You can answer this question by inserting a photo of a re-drawn symbol.**
+
+The Four Wheel Drive symbol is just a Jeep and could represent motorized vehicles or only cars. Placing a 4-WHEEL ONLY lettering underneath the vehicle would more accurately describe what this signage means. 
+
+![4 WHEEL DRIVE ONLY](E:/GEOG 4870/4wheel.png)
+
+Kint your file and submit the html on CANVAS.

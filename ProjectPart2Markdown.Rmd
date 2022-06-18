@@ -1,0 +1,211 @@
+---
+title: "ProjectPart2"
+author: "Jesse Henderson"
+date: "3/21/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("E:/GEOG 4870/ProjectPart2")
+knitr::opts_knit$set(root.dir = "E:/GEOG 4870/ProjectPart2")
+
+library("ggspatial")
+library(tidyverse)
+theme_set(theme_bw()) #use the bw theme for all ggplot maps
+library(sf)
+library(sp)
+library(tmap)
+library(mapview)
+library(leaflet)
+library(ggplot2)
+library("rnaturalearth")
+library(rgeos)
+library(ggmap)
+library(rgee)
+library(here)
+library(raster)
+library(rgdal)
+library(spatialEco)
+library(foreign)
+library(gdtools)
+library(exactextractr)
+library(fasterize)
+```
+1. Check Projections.
+
+```{r}
+#loading my data into R.
+WaterLandUse <- read.csv("C:/Users/bucke/Desktop/Word Documents/Senior Year/GEOG 4870\\Utah_Water_Related_Land_Use.csv", header = TRUE)
+
+#removing LUID as it is repetitive.
+WaterLandUse = subset(WaterLandUse, select = -c(LUID))
+
+#I removed 4 outliers from this dataset that made it almost impossible to view anything. Even with those removals I might need to go even smaller. This dataset is massive and probably needs some trimming down. I might need to focus only on certain acreages under a certain size. This doesn't mean the data isn't important, it means it doesn't fit this context. In the outliers removed plot more than half the data is still bunched too closely together to view anythning meaningful. 
+
+WaterLandUse4Removed <- read.csv("C:/Users/bucke/Desktop/Word Documents/Senior Year/GEOG 4870\\Utah_Water_Related_Land_Use_4_outliers_removed.csv", header = TRUE)
+
+WaterLandUse4Removed = subset(WaterLandUse4Removed, select = -c(LUID))
+
+#reading the shapefile into R.
+UT_Crop.shp <- st_read("E:/GEOG 4870/projectpart3","WaterRelatedLandUse")
+
+#WGS84, going to reproject to UTM zone 12. 
+crs(UT_Crop.shp)
+
+#UTM zone 12 epsg code is 32612
+UT_Crop_sf <- st_transform(UT_Crop.shp, crs = 32612)
+
+#just to get a basic view of the shapefile. This dataset has an incredibly large amount of shapefiles, it took probably 10 minutes to load the image in. I'm going to trim it down and then intersect it with another dataset. This is way too much data to work with. I have commented this section out because it takes a very long time to load as there are thousands of shapefiles. 
+
+#ggplot() +
+  #geom_sf(data = UT_Crop_sf)
+```
+
+
+
+2. Use spatial merging/sub-setting tool.
+3. Extract subsets using R indexing. 
+
+I'm combining these two steps into one, it will be much easier for me to merge the datasets together after they have been filtered because they are so large. There are over 30,000 and 500,000 attributes in each respective dataset. I don't want to try and intersect them at max size it would take way too long to process.
+
+I have added a new dataset that is the location of Oil Wells within the state Of Utah. I'm interested to see if they are prominent on field crop areas within the state. I've read articles in the past about farmers having disputes with large oil drillers and I'm interested in how many of these wells are on farmland. Using the st_within tool, I have found there are 47 oil wells on field crop land in the state of Utah. This is quite a bit more than I was expecting and I'm surprised there aren't more public disputes about how the land is used. 
+
+Utah mapping PORTAL. (2021, March 23). Retrieved March 24, 2021, from https://gis.utah.gov/data/energy/oil-gas/
+
+```{r}
+
+#adding a Utah oil well point shapefile to the dataset, to intersect with the existing crop group shapefile. 
+UT_oil<- st_read("E:/GEOG 4870/ProjectPart2","Utah_Oil_and_Gas_Well_Locations")
+
+
+#reproject to UTM zone 12
+UT_oil_sf <- st_transform(UT_oil, crs = 32612)
+
+#filtering the crop group dataset only field crops. This is the shapefile dataset not the .csv dataset. 
+UT_Crop_sf2 <- UT_Crop_sf %>%
+  filter(CropGroup == "Field Crops")
+
+#Oil well point shapefile locations within the polygons that have crop groupings of "Field Crops" is what this st function is doing. 
+oil_crop_within <- st_within(UT_oil_sf, UT_Crop_sf2)
+
+#creating it as a data frame to be able to view it using head.
+oil_crop_withindf <- as.data.frame(oil_crop_within)
+
+#this data frame has 47 observations which means there are 47 different oil wells completely located within areas that are considered "Field Crops". This would be areas like corn or alfalfa. 
+head(oil_crop_withindf, 50)
+
+#utah boundary
+UT_shp <- st_read("E:/GEOG 4870/ProjectPart2","Counties")
+
+#reproject to UTM zone 12
+UT_shp_sf <- st_transform(UT_shp, crs = 32612)
+
+#basic visualization of all field crop locations in Utah, some extending outward into Idaho and COlorado. 
+ggplot() +
+  geom_sf(data = UT_shp_sf) +
+  geom_sf(data = UT_Crop_sf2)
+  
+#basic visualization of all oil wells in Utah. 
+ggplot() +
+  geom_sf(data = UT_shp_sf) +
+  geom_sf(data = UT_oil_sf)
+
+#This is a quick visualization of the intersection or within function above. Intersection and within are technically the same thing in this example. Since within examines the points within a polygon and intersection examines points intersecting a polygon they are the same thing unless a point is half on and half off of a polygon. They are not, I double checked this in ArcGIS Pro just to be sure I could use intersection here. This plot shows the locations that oil wells are located on field crops. The points are a bit zoomed out, there are a few on top of each other in the Eastern half of the state. 
+ggplot() +
+  geom_sf(data = UT_shp_sf) +
+  geom_sf(data = st_intersection(UT_oil_sf, UT_Crop_sf2))
+```
+
+
+
+4. I'm going to create a new spatial data frame using the locations that are clumped together in Eastern Utah near Roosevelt/Vernal. 
+
+```{r}
+#this is a data frame of only field crop locations within Duschene and Uintah county which are the two counties above that are in the area of interest in Eastern Utah. 
+UT_Crop_sfdf <- UT_Crop_sf2 %>%
+  filter(County == c("Duchesne","Uintah"))
+
+head(UT_Crop_sfdf)
+
+#these two lines of code essentially do the same thing, but in different ways. This is much cleaner than the above way. 
+UT_exp <- UT_Crop_sfdf %>%
+  as.data.frame() %>%
+  group_by(County)
+
+head(UT_exp,250)
+
+#filtering to Uintah county, for some reason it will not let me combine the two together. I had to make separate names for each. When I combined the two it came back with 0 variables. 
+UT_shp_sf2 <- UT_shp_sf %>%
+  filter(NAME == "UINTAH")
+#filtering to Duchesne county
+UT_shp_sf3 <- UT_shp_sf %>%
+  filter(NAME == "DUCHESNE")
+
+#basic plot of what this looks like. 
+ggplot() +
+  geom_sf(data = UT_shp_sf2) +
+  geom_sf(data = UT_shp_sf3) +
+  geom_sf(data = UT_Crop_sfdf) +
+  geom_sf(data = st_intersection(UT_oil_sf, UT_Crop_sf2))
+```
+
+
+
+5. ggplot map.
+
+  You can see that there is a clear grouping of oil wells that occur within field crops is these 2 counties in Eastern Utah. There are a few others throughout the state, but they are sparse and less frequent than in these counties. This leads me to believe that there are a lot of oil opportunities in this area that occur on or near existing farm land. This creates disagreements and feuds between farmers and oil companies. If I could get the zoom to work correctly it would be possible to see how much of the land actually is covered in field crops and the density of oil wells in those field crops. I'm attempting to show the concentration of oil wells in field crops in this area. The legend and map elements in R are also very finicky and I can't quite get them to do exactly what I want, but this is good enough for the info. 
+```{r}
+ggplot() +
+  geom_sf(data = UT_shp_sf2, aes(fill = "Uintah County"))+ #adding uintah shapefile
+  geom_sf(data = UT_shp_sf3, aes(fill = "Duchesne County")) + #adding duchesne shapefile
+  geom_sf(data = UT_Crop_sfdf, aes(fill = "Field Crops")) + #adding field crop shapefile
+  geom_sf(data = st_intersection(UT_oil_sf, UT_Crop_sf2), aes(colour = "Oil Wells"), show.legend = "point") + #adding the oil well intersection
+  scale_fill_manual(values = c("Uintah County" = "azure3","Duchesne County" = "azure3","Field Crops" = "blue"), #recoloring the legend
+                    guide = guide_legend(override.aes = list(linetype = "blank", shape = NA))) + 
+  xlab("Longitude") + #x label
+  ylab("Latitude") + #y label 
+  ggtitle("Oil Wells on Field Crop Boundaries in Eastern Utah") + #title
+  annotation_north_arrow(location = "bl", which_north = "true", #adding north arrow to bottom left.
+        pad_x = unit(0.05, "in"), pad_y = unit(0.05, "in"),
+        height = unit(0.4, "in"), width = unit(0.25, "in"),
+        style = north_arrow_orienteering) +
+  annotation_scale(location = "tr", width_hint = 0.25) + #adding scale to top right. 
+  labs(fill = "Boundaries") + #changing legend titles.
+  labs(colour = "Points of Interest") +
+  theme(plot.title = element_text(hjust = 0.5))  #centering title.
+  
+  #I cannot understand why this won't zoom in to the box I want. I've tried everything I can think of. I'm trying to zoom it to the polygons. 
+  #coord_sf(xlim = disp_win_coord[,'X'], ylim = disp_win_coord[,'Y'],
+             #datum = sf::st_crs(32612) , expand = FALSE)
+
+#below is code to create a display box for the map, but when I add it to ggplot it goes to a blank plot.                                    
+#target.crs <- '32612'
+
+#disp_wind_utm12 <- st_sfc(st_point(c(-111.0,-109.0)), st_point(c(39,41)), crs = 32612)
+
+#disp_wind_trans <- st_transform(disp_wind_utm12, crs = 32612)
+
+#disp_win_coord <- st_coordinates(disp_wind_trans)
+```
+
+
+
+6. tmap.
+
+I generally like ggplot more for mapping in R, but this data works really well in the interactive tmap view. It is really easy to get a good view of where everything is located using the ESRI topography basemap. It is much easier to tell where things are at than in the ggplot map. Both definitely have their limitations and using QGIS or ArcGIS is just better, but these have good statistical uses. The same trends are visible in this map as the ggplot map above. There seems to be a clump in pleasant valley which has most of the oil wells. I also can't get the legend to show the oil wells at all. It tells me that it is only possible when not in view mode, which I find frustrating. 
+
+```{r}
+tmap_mode("view")
+
+  tm_shape(UT_Crop_sfdf) + #adding field crop shapefile
+  tm_fill(col = "darkgreen") + #color
+  tm_borders(col = "darkgreen") + #color
+ tm_shape(st_intersection(UT_oil_sf, UT_Crop_sf2)) + #adding the intersected oil wells to the map
+  tm_symbols(size = 0.35, col = "red") + #making them red on the map
+  tm_add_legend('fill',col="red", shape = 21,size = 1.0, labels ="Oil Wells") + #creating what is supposed to be a legend that doesn't show up
+  tm_add_legend('fill',col = "darkgreen", size = 1.0, shape = 21, labels = "Field Crops") + #legend key for field crops
+  tm_layout(title = "Oil Wells within Field Crop Boundaries in Eastern Utah") + #title
+  tm_compass() + #compass
+  tm_scale_bar()+ #scale bar in km
+  tm_basemap("Esri.WorldTopoMap") #topography basemap
+```

@@ -1,0 +1,261 @@
+---
+title: "Henderson_projectpart2"
+author: "Jesse Henderson"
+date: "4/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("E:/GEOG 4870/ProjectPart2")
+knitr::opts_knit$set(root.dir = "E:/GEOG 4870/ProjectPart2")
+
+library("ggspatial")
+library(tidyverse)
+theme_set(theme_bw()) #use the bw theme for all ggplot maps
+library(sf)
+library(sp)
+library(tmap)
+library(mapview)
+library(leaflet)
+library(ggplot2)
+library("rnaturalearth")
+library(rgeos)
+library(ggmap)
+library(rgee)
+library(here)
+library(raster)
+library(rgdal)
+library(spatialEco)
+library(foreign)
+library(gdtools)
+library(exactextractr)
+library(fasterize)
+library(spatstat)
+library(spdep)
+```
+The Challenge
+
+  1. The issue I am focusing on is the placement and relationship of oil wells in different types of agriculture across Utah. There could be some spatial relationships between the locations of these two variables and using spatial analysis I will be able to find patterns. 
+  2. This issue is important in the agricultural sector as well as in the oil industry. Much of Eastern Utah is covered in oil well fields and the same can be said for agriculture. This can cause tension between large scale oil companies and small town farmers. This analysis might shed some light on any spatial relationships involved. This analysis will be covering Duschene and Uintah counties. 
+  3. Is there any relationship between the placement of oil wells and field crop agriculture in Utah? Are there enough instances of relationships to warrant further research into the topic?
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results = FALSE}
+#loading my data into R.
+WaterLandUse <- read.csv("C:/Users/bucke/Desktop/Word Documents/Senior Year/GEOG 4870\\Utah_Water_Related_Land_Use.csv", header = TRUE)
+
+#removing LUID as it is repetitive.
+WaterLandUse = subset(WaterLandUse, select = -c(LUID))
+
+#I removed 4 outliers from this dataset that made it almost impossible to view anything. Even with those removals I might need to go even smaller. This dataset is massive and probably needs some trimming down. I might need to focus only on certain acreages under a certain size. This doesn't mean the data isn't important, it means it doesn't fit this context. In the outliers removed plot more than half the data is still bunched too closely together to view anythning meaningful. 
+
+WaterLandUse4Removed <- read.csv("C:/Users/bucke/Desktop/Word Documents/Senior Year/GEOG 4870\\Utah_Water_Related_Land_Use_4_outliers_removed.csv", header = TRUE)
+
+WaterLandUse4Removed = subset(WaterLandUse4Removed, select = -c(LUID))
+
+#reading the shapefile into R.
+UT_Crop.shp <- st_read("E:/GEOG 4870/projectpart3","WaterRelatedLandUse")
+
+#WGS84, going to reproject to UTM zone 12. 
+crs(UT_Crop.shp)
+
+#UTM zone 12 epsg code is 32612
+UT_Crop_sf <- st_transform(UT_Crop.shp, crs = 32612)
+
+#utah boundary
+UT_shp <- st_read("E:/GEOG 4870/ProjectPart2","Counties")
+
+#reproject to UTM zone 12
+UT_shp_sf <- st_transform(UT_shp, crs = 32612)
+
+#filtering to duchesne and uintah. 
+UT_du_ui <- UT_shp_sf %>%
+  filter(OBJECTID == c("21","2"))
+
+#visualize the two counties of interest
+ggplot() +
+  geom_sf(data = UT_du_ui) +  
+  xlab("Longitude") + #x label
+  ylab("Latitude") + #y label 
+  ggtitle("Duchesne and Uintah County") + #title
+  annotation_north_arrow(location = "bl", which_north = "true", #adding north arrow to bottom left.
+        pad_x = unit(0.05, "in"), pad_y = unit(0.05, "in"),
+        height = unit(0.4, "in"), width = unit(0.25, "in"),
+        style = north_arrow_orienteering)
+```
+
+Data 
+
+  Utah Water Related Land Use
+  
+  1. The first dataset comes from open source GIS data from the state of Utah. (Utah Water Related Land Use) It contains information regarding land use and how water is used on those lands. It is mostly done on agricultural areas, but is also on water bodies, urban, areas, and riparian/wetland plots. Each object ID has an associated land use, crop group, description of that group, crop irrigation method, acreage, state, county, water basin, sub area, surveyed year, and length and area calculations for shapefiles associated with each individual location. There are 336,665 different locations making this an incredibly large dataset. (UTAGRC)
+  2. This data is collected by field crews using tablets which contain pre-loaded feature classes which they then assign all of the correct information to. Each polygon or field is labeled by the field worker at the site. Digitizing is done on ArcMap where any changes to the labels given by the field worker are logged. In ArcMap these feature classes get even more precisely monitored. The final shapefile is categorized with the correct land use types and crop types. It is then compared to a historical record to view changes and validity.(UTAGRC)
+  3. This data was already very tidy. All the columns were pre-separated, no NA values, and spaced correctly. I only needed to tidy one section of the data. The first two columns labeled OBJECT ID and LUID were exactly the same values. There is no reason to have both so I subset LUID and removed it from the dataset.The LUID column is just a placeholder if you plan on using 2 different years. While some of these columns have only 4 classes within them (example: IRR_Method has drip, flood, dry crop, none, and sub-irrigated) there is no reason to pivot them wider because the data is already very clean and each OBJECT ID has its own associated data. I was pleasantly surprised with this data, most government datasets are messy and this was completely the opposite. (UTAGRC)
+  
+   Utah Oil Well Locations 
+   
+   1. The second dataset also is from the UTAGRC and contains a point geodatabase with the location of oil wells within the state of Utah. This dataset contains the well name, the well location, its operation status, the coordinates, the owner of the well, if the well is a government issues well or not, the elevation of the well, the date the well either was built or the date the well stopped production, the jurisdiction, and the well type. (Utah Mapping PORTAL)
+   2. This dataset is operated and maintained by the Utah Department of Natural Resources, but most of the data comes from outside contractors who send the data into the UDNR. This dataset was created to have a deeper understanding of Utah oil well locations and to make better decisions regarding placement of new wells and the locations of existing dried-up wells. The contractors are also commissioned by the United States Department of Energy to collect more descriptive information on the well. (Utah Mapping PORTAL)
+   3. I luckily did not have to clean much of this data. The Department of Energy always has very clean datasets with almost no errors and no NA values. I eventually decided to remove the oil wells that were not in use anymore, the ones that were out of commission. I did not want to use oil wells that were not currently operating as they would just be sitting there not causing issues.  (Utah Mapping PORTAL) 
+
+
+  Visual 1
+  
+  This first map shows the locations of all oil wells within the state of Utah. This map shows a clear visual trend of a large cluster of oil wells being located within the central/eastern part of Utah. This is going to be the area of focus. 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results = FALSE}
+#basic map showing the location of all oil wells within Utah. 
+UT_oil<- st_read("E:/GEOG 4870/ProjectPart2","Utah_Oil_and_Gas_Well_Locations")
+
+UT_oil_sf <- st_transform(UT_oil, crs = 32612)
+
+ggplot() +
+  geom_sf(data = UT_shp_sf) +
+  geom_sf(data = UT_oil_sf, aes(colour = "Oil Wells"), show.legend = "point") +
+    xlab("Longitude") + #x label
+  ylab("Latitude") + 
+  ggtitle("Oil Wells in Utah") + #title
+  annotation_north_arrow(location = "bl", which_north = "true", #adding north arrow to bottom left.
+        pad_x = unit(0.05, "in"), pad_y = unit(0.05, "in"),
+        height = unit(0.4, "in"), width = unit(0.25, "in"),
+        style = north_arrow_orienteering) +
+  annotation_scale(location = "tr", width_hint = 0.25) +
+  labs(colour = "Points")
+```
+
+  Visual 2
+  
+  This map shows all locations where oil wells are located within field crop boundaries in Utah. There are 4 locations not within Duchesne and Uintah counties. There is a clear cluster of intersected locations within these two counties.
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results = FALSE}
+#filtering to only field crop boundaries
+UT_Crop_sf3 <- UT_Crop_sf %>%
+  filter(CropGroup == "Field Crops")
+
+#plotting the intersection
+ggplot() +
+  geom_sf(data = UT_shp_sf) +
+  geom_sf(data = st_intersection(UT_oil_sf, UT_Crop_sf3), aes(colour = "Oil Wells"), show.legend = "point") +
+    xlab("Longitude") + #x label
+  ylab("Latitude") + 
+  ggtitle("All Oil Wells within Field Crop Boundaries in Utah") + #title
+  annotation_north_arrow(location = "bl", which_north = "true", #adding north arrow to bottom left.
+        pad_x = unit(0.05, "in"), pad_y = unit(0.05, "in"),
+        height = unit(0.4, "in"), width = unit(0.25, "in"),
+        style = north_arrow_orienteering) +
+  annotation_scale(location = "tr", width_hint = 0.25) +
+  labs(colour = "Intersections")
+```
+  
+  
+  Visual 3
+  
+  This is a map of oil wells that exist on field crop boundaries that are only in Uintah and Duchesne counties in Utah. The red dots indicate the oil wells that exist on a field crop boundary and the light green shape boundaries are the outline of field crop boundaries in these two counties. 
+
+```{r ,echo=FALSE, warning=FALSE, message=FALSE, results = FALSE}
+UT_shp_sf2 <- UT_shp_sf %>%
+  filter(NAME == "UINTAH")
+#filtering to Duchesne county
+UT_shp_sf3 <- UT_shp_sf %>%
+  filter(NAME == "DUCHESNE")
+
+#adding a Utah oil well point shapefile to the dataset, to intersect with the existing crop group shapefile. 
+UT_oil<- st_read("E:/GEOG 4870/ProjectPart2","Utah_Oil_and_Gas_Well_Locations")
+
+#reproject to UTM zone 12
+UT_oil_sf <- st_transform(UT_oil, crs = 32612)
+
+#filtering the crop group dataset only field crops. This is the shapefile dataset not the .csv dataset. 
+UT_Crop_sf2 <- UT_Crop_sf %>%
+  filter(CropGroup == "Field Crops") %>%
+  filter(County == c("Uintah","Duchesne"))
+
+
+#Oil well point shapefile locations within the polygons that have crop groupings of "Field Crops" is what this st function is doing. 
+oil_crop_within <- st_within(UT_oil_sf, UT_Crop_sf2)
+
+#creating it as a data frame to be able to view it using head.
+oil_crop_withindf <- as.data.frame(oil_crop_within)
+
+#this data frame has 47 observations which means there are 47 different oil wells completely located within areas that are considered "Field Crops". This would be areas like corn or alfalfa. 
+head(oil_crop_withindf, 50)
+
+#utah boundary
+UT_shp <- st_read("E:/GEOG 4870/ProjectPart2","Counties")
+
+#reproject to UTM zone 12
+UT_shp_sf <- st_transform(UT_shp, crs = 32612)
+
+ggplot() +
+  #geom_sf(data = UT_shp_sf2, aes(fill = "Uintah County"))+ #adding uintah shapefile
+ # geom_sf(data = UT_shp_sf3, aes(fill = "Duchesne County")) + #adding duchesne shapefile
+  geom_sf(data = UT_Crop_sf2, aes(fill = "Field Crops")) + #adding field crop shapefile
+  geom_sf(data = st_intersection(UT_oil_sf, UT_Crop_sf2), aes(colour = "Oil Wells"), show.legend = "point") + #adding the oil well intersection
+  scale_fill_manual(values = c("Uintah County" = "azure3","Duchesne County" = "azure3","Field Crops" = "lightgreen"), #recoloring the legend
+                    guide = guide_legend(override.aes = list(linetype = "blank", shape = NA))) + 
+  xlab("Longitude") + #x label
+  ylab("Latitude") + #y label 
+  ggtitle("Oil Wells on Field Crop Boundaries in Eastern Utah") + #title
+  annotation_north_arrow(location = "bl", which_north = "true", #adding north arrow to bottom left.
+        pad_x = unit(0.05, "in"), pad_y = unit(0.05, "in"),
+        height = unit(0.4, "in"), width = unit(0.25, "in"),
+        style = north_arrow_orienteering) +
+  annotation_scale(location = "tr", width_hint = 0.25) + #adding scale to top right. 
+  labs(fill = "Boundaries") + #changing legend titles.
+  labs(colour = "Points of Interest") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+  
+  
+  Reflection
+  
+  1. I chose this data because I was interested in how water is used throughout Utah and how it differs across the state. I originally was going to look at these patterns, but I came across an article about farmers and oil wells somewhere and cannot for the life of me remember where I found it. This led me to find the oil well database which I used to make these maps above. Overall, both datasets were very interesting to me and I learned a great deal about how and where water is used throughout Utah. The most interesting concept is I think the spatial patterns can be applied to any region or state. I used the Moran's I test, but I couldn't figure it out with the coding. I ran it through ArcGIS Pro using the intersections as the variable and it came out as 0.41. This means the points are more clustered because the Moran's I value is positive and a bit larger than 0. This supports my visual trend pattern conclusions about there being clusters in the Uintah/Duchesne area. I chose this because it would give me a good understanding of the spatial clustering of the intersections. If there really was a difference as to the locations of these wells that intersect field crop boundaries. I did not want to leave the analysis section blank, so this is why I used ArcGIS Pro to find the value since I know how to do it there. I used the same datasets with the same data manipulations to avoid any inaccurate representations of the data. 
+  
+  2. In the maps I chose to exclude the wells that were not currently operating and only used well that were currently operational. This removes any wells that are just sitting there not doing anything and have no chance of causing issues for the farmers. There is no reason to have those wells be a part of the data as they are irrelevant in the current temporal frame. I also could have used more of a hotspot tool or a nearest neighbor tool to analyze the spatial patterns. 
+  
+  3. I found that this information has changed the way I look at water usage greatly. By just using the Water Related Land Use dataset I became very familiar with where field crops are located and there are clear patterns as to where agriculture on a larger scale is more prominent. Field crops consist of potatoes, corn, and sorghum which require huge amounts of space. The regions which had the most field crops are areas in Utah with smaller populations than the Wasatch Front. This helped me better understand the dynamics of how much space in an area determines what the primary land use is going to be. This dataset also had polygons that were labeled for urban use and developmental use. These areas were nearly just as large as the agricultural areas. This shows to me that Utah is growing quickly. The town I grew up in, Farmington (ironic right?), used to be nearly all agricultural and a few stores. Now, there's a full size outdoor shopping mall, multiple car dealerships, a U of U hospital, and many apartment complexes. This research further proved to my own assumptions that Utah is changing rapidly and drastically from what it used to be. In terms of the oil well locations, I had no idea there was such a large amount of oil drilling in Utah. The first time I plotted the points to see how many there were I was blown away. Nearly the whole state was covered in points which I did not expect. In the US, Texas and a few other places are mentioned as the primary oil generators, but this shows to me that Utah has generated quite a bit of oil by itself. I also did not know there were so many oil wells that intersected with agriculture. I had a previous notion that all the oil wells were just out in fields or in their own areas and that none crossed public or private property. That assumption was incorrect and I learned a good amount about how many areas share their jurisdiction with oil companies. 
+  
+  4. I was very frustrated with the spatial regression section of this. I tried lines on lines of code to try and get the Moran's test to work on the intersection points and I could not figure it out. I wanted to try and do this assignment fully on my own without outside help to test my knowledge of what I have learned this semester in this course and unfortunately I came up short in this area. I'm happy to say I coded the rest of this assignment without outside help. I started a blank R markdown and just started writing the code from memory and previous assignments from this class. Everything ended up working how I wanted it to with all my visuals which I'm proud of. When I started this class I was overwhelmed with trying to learn a new coding language from scratch, but I kept my head down and worked at it and it eventually started to make sense. I'm glad I was able to push past the difficulties and the struggles and really learn how to use R at its core. This assignment proved to me that I can write code even if I do not think it is my best work at times. I know I can look at code and understand how to fix it or how to write it in R now and that is something I definitly could not do before this class. I was very happy with the way I cleaned this dataset to fit what I wanted to show. The data did have some errors and to be able to trim it to fit my intended goals was good. I was also happy with the relationships I was able to establish with merging two datasets. I was definitely nervous to merge these two datasets together because they were so different, but I ended up being able to make it work. 
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, results = FALSE}
+#moran's I test workings
+#had problems with this code I could never figure out. 
+
+#UT_Crop_sf2$count <- st_sf(data.frame (Count = lengths(st_intersects(UT_oil_sf,UT_Crop_sf2)), geom = UT_Crop_sf2))
+
+
+#compute queen neighborhood
+#queen <- poly2nb(UT_Crop_sf2)
+#compute rook neighborhood
+#rook <- poly2nb(UT_Crop_sf2, queen = F)
+
+#using the coordinates from the center of the polygon
+#coords <- st_centroid(UT_Crop_sf2)
+
+#plotting queen neighborhood
+#plot(st_geometry(UT_Crop_sf2), main = "Queen")
+#plot(queen, st_coordinates(coords), add=T)
+
+#plotting rook neighborhood
+#plot(st_geometry(UT_Crop_sf2), main = "Rook")
+#plot(rook, st_coordinates(coords), add=T)
+
+#binary <- nb2listw(rook, zero.policy = T)
+
+#viewing the weighting, should be 1
+#summary(sapply(binary$weights, sum))
+#creating standardization with binary style for rook
+#binary1 <- nb2listw(rook, style = 'B', zero.policy = T)
+
+#weighting changes
+#summary(sapply(binary1$weights, sum))
+
+#mt <- moran.test(UT_Crop_sf2$Acres, listw = binary, randomisation = T)
+
+```
+References
+
+  UTAGRC. (2019). Utah mapping PORTAL. Retrieved March 15, 2021, from https://gis.utah.gov/data/planning/water-related-land/
+  Utah mapping PORTAL. (2021, March 23). Retrieved March 24, 2021, from https://gis.utah.gov/data/energy/oil-gas/
+  
+  
+

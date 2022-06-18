@@ -1,0 +1,224 @@
+---
+title: 'Henderson_Assign11'
+author: "Jesse Henderson"
+date: "3/30/2021"
+output: html_document
+---
+
+### Instructions
+
+**For each question below, show code.**  Once you've completed things, don't forget to to upload this document (knitted version please!) to CANVAS. 
+
+A few tips:
+
+* Don't forget to knit your document frequently!
+* Don't forget to `install.packages()` and load them using `library()`.
+* Don't forget to use `?` or `help()` if you're unsure about a function
+* **EXPLAIN WHAT YOUR RESULTS MEAN!**  Think about the numbers and visualizations and explain, in words, what they mean.
+* Make sure you label all axes and legends and add a title to your plots and maps.
+
+**23 points total**
+
+### Set-up (10 points)
+
+This week we will continue working with the Toxics Release Inventory (TRI) data. In this assignment we will use global and local autocorrelation statistics to test if polluting industries are concentrated in neighboring census tracts and to identify pollution hotspots. You will conduct this analysis in a specific county, you should use your state-level analysis from Assignment 10 to help guide your county selection. You might consider whether TRI sites were clustered in a specific part of the state and choose this region for further analysis.    
+
+**1. (1) Load the packages you will need for your analysis, (2) read in your TRI site .csv and turn it into a MULTIPOINT spatial object, (3) use `tidycensus` (with `geography = "tract"`, `geometry = TRUE`, state = "YOUR STATE", and county = "YOUR COUNTY") to create a shape file defining the boundary of the county where you will locate your analysis.** (5)
+
+```{r}
+setwd("E:/GEOG 4870/Assignment10")
+knitr::opts_knit$set(root.dir = "E:/GEOG 4870/Assignment10")
+
+library(tidycensus)
+library(tidyverse)
+theme_set(theme_bw()) #use the bw theme for all ggplot maps
+library(sf)
+library(tmap)
+library(mapview)
+library(ggplot2)
+library(spatstat)
+library(osmdata)
+library(spdep)
+
+#getting state and county shapefile boundaries
+UT <- get_acs(geography = "tract", county = "davis", variables = c(total_population = "B01003_001"), year = 2019, state = "UT", geometry = TRUE)
+
+#viewing variables
+v19 <- load_variables(year = 2019, 
+               dataset = "acs5",
+               cache = TRUE)
+view(v19)
+
+
+#adding TRI data 
+TRI <- read.csv("E:/GEOG 4870/states/STATE_SINGLE_UT.csv")
+
+UT_sf <- st_transform(UT, 4269)
+#creating spatial data frame
+TRI_sf <- st_as_sf(TRI,coords=c("LONGITUDE83","LATITUDE83"), crs=4269)
+TRI_sf2 <-st_as_sf(TRI,coords=c("LONGITUDE83","LATITUDE83"), crs=26912)
+```
+
+**2. Use `st_intersection()` to count the number of TRI sites in each census tract and assign the output to a new column in your census tract spatial data.frame.** (2)
+
+```{r}
+#intersection of TRI sties in Tooele County, this shows 571 observations
+UT_sf$sites <- st_sf(data.frame (Count = lengths(st_intersects(UT_sf,TRI_sf)), geom = UT_sf))
+
+view(UT_sf)
+#assigning the output to a new column called Counts which is the number of intersections
+UT_sf2 <- (st_sf(data.frame(Count = lengths(st_intersects(UT_sf,TRI_sf)), geom = UT_sf)))
+
+#viewing to see if it made the table how I wanted it so I can use the Counts 
+view(UT_sf2)
+```
+
+**3.  Create a `rook` neighborhood between census tracts and plot it on top of a map of the census tracts (see the tutorial for hints on plotting `nb` objects).** (2)
+
+```{r}
+#compute queen neighborhood
+queen <- poly2nb(UT_sf2)
+#compute rook neighborhood
+rook <- poly2nb(UT_sf2, queen = F)
+
+#using the coordinates from the center of the polygon
+coords <- st_centroid(UT_sf2)
+
+#plotting queen neighborhood
+plot(st_geometry(UT_sf2), main = "Queen")
+plot(queen, st_coordinates(coords), add=T)
+
+#plotting rook neighborhood
+plot(st_geometry(UT_sf2), main = "Rook")
+plot(rook, st_coordinates(coords), add=T)
+```
+
+**4. Use `nb2listw()` to assign binary weights to your list of rook neighbors.** (1)
+
+```{r}
+#creating standardization for rook
+binary <- nb2listw(rook)
+print(binary)
+#viewing the weighting, should be 1
+summary(sapply(binary$weights, sum))
+#creating standardization with binary style for rook
+binary1 <- nb2listw(rook, style = 'B')
+print(binary1)
+#weighting changes
+summary(sapply(binary1$weights, sum))
+```
+
+### Moran's I (4 points)
+
+**4. Use `moran.test()`  to compute Moran's I of the TRI site count attribute in your tracts shapefile using the binary weights object you just created.  Assume the null hypothesis is that the data is *randomly* distributed.  Interpret the output, are TRI sites randomly distributed?** (2)
+
+```{r}
+#creating moran test using the count of intersections in a new data fram with the binary weight list. 
+mt <- moran.test(UT_sf2$Count, listw = binary, randomisation = T)
+#viewing moran test
+mt
+#the moran I statistic is essentially 0 meaning there is no spatial autocorrelation between TRI site distribution in Tooele County Census Tracts
+```
+
+**5. Use the `sp.correlogram()` function to create a correlogram of the Moran's I of the TRI site count attribute using the rook neighborhood you built above.  At what lag does the estimation of Moran's I intersect with zero? Start with order = 8, but you may have to alter the order number if you get the error `sp.correlogram: too few included observations in higher lags: reduce order.`** (2)
+
+```{r}
+#I kept going down orders until it hit 3. Plotting correlogram. 
+gmi <- sp.correlogram(rook, UT_sf2$Count, order = 3, method = "I", zero.policy=TRUE)
+plot(gmi, main = "Correlogram")
+
+#plotting the moran statistic 
+moran.plot(UT_sf2$Count, listw = binary)
+```
+
+### G statistic: Hot spots and cold spots (6 points)
+
+**6. Compute the G statistic for TRI counts in census tracts. Plot the G statistic output on a map to visualize spatial clusters of census tracts with high TRI counts and low TRI counts.** (2)
+
+```{r}
+#this function provides the hot spots and cold spots for spatial autocorrelation of the moran test. 
+gstatistic <- localG(UT_sf2$Count, listw = binary)
+gstatistic
+
+#setting to plot mode
+tmap_mode("plot")
+
+#new column with the gstatistic values from above.
+UT_sf2$Gstat <- gstatistic
+
+#plotting the gstat hotspots using tmap.
+tm_shape(UT_sf2) + 
+  tm_fill("Gstat", 
+          palette = "-RdBu",
+          style = "pretty") +
+  tm_borders(alpha=.4)
+#since I used a smaller population and census tract county it is more difficult to visualize hot and cold spots. For example if I used SLC there would be a lot more hot and cold spots due to the increased number of census tracts. There are only 11 census tracts in Tooele County. 
+```
+
+**6. Define a hexagonal grid with `cellsize = 2000` for your study area. We worked with a square grid in the exercise, for help making a hexagonal grid see `help(st_make_grid)`.** (2)
+
+```{r}
+#get bounding box for Tooele County. 
+davis <- st_bbox(UT_sf2) %>%
+  opq() %>%
+  add_osm_feature("Count")
+
+#simple features transformation
+davis <- osmdata_sf(davis)
+
+#making Davis grid
+davis_grid <- st_make_grid(UT_sf2, 
+                        cellsize = 2000,
+                        what = "polygons",
+                        square = FALSE) %>% st_cast("POLYGON") 
+
+#reproject to UT_sf2 
+davis_grid <- st_transform(davis_grid, crs = 4269)
+
+#count the intersections of the new grid and the polygons
+davis_grid_count<- st_sf(data.frame (Count = lengths(st_intersects(davis_grid, UT_sf2)), geom = davis_grid))
+
+#I can't figure out why this is only showing 3 hexagonal grids. No matter what county or cellsize I use it is only showing 3 grids. 
+
+#this also is showing NA values, which doesn't make sense to me and I can't find out why. 
+t <- st_area(davis_grid)[1]
+units(t) <- "mi^2"
+t
+
+```
+
+**7. Compute the G statistic for TRI counts in grid cells. Plot the G statistic output on a map to visualize spatial clusters of grid cells with high TRI counts and low TRI counts.** (2)
+
+```{r}
+#I think the same issues I'm having above with the grid are happening here. Since the grid isn't showing an area I can't get the rook and queen functions to show. 
+rookp2 <- poly2nb(davis_grid_count, queen = FALSE)
+binary2 <- nb2listw(rookp2, style = 'B')
+
+gstat2 <- localG(davis_grid_count$Count, listw = binary2)
+davis_grid_count$Gstat <- gstat2
+
+gstat2
+
+#since gstat2 doesn't have any applicable values the chart will not show. 
+#tm_shape(UT_sf2) + 
+  #tm_fill("gstat2", 
+          #palette = "-RdBu",
+          #style = "pretty") +
+  #tm_borders(alpha=.4)
+
+```
+
+### Reflection (3 points)
+
+When conducting data analysis, you as a researcher not only have to demonstrate your technical skills but consider your choices and their impacts. Reflecting on data analysis helps you document your process, what worked, what didn't, and how you might improve. At the end of each class assignment you will asked to write a sort reflection. Please respond to the the following prompt:
+
+**1. In this analysis you summarized point counts in census tracts and in a uniform hexagonal grid. Based on what you know about the Modifiable Areal Unit Problem (MAUP), discuss the limitations of summarizing point data at the census tract level.**  
+
+Using any form of spatial autocorrelation analysis there will be limitations because adding things to maps that are more complex in the real world distorts data that is simplified down. This is true across all forms of data analysis and spatial data analysis. There are variables that can't be accounted for in algorithms or modeling. In this example, hexagonal grids using census tract level data has limitations of the grids being too large for the census tracts and leaving out data that could be part of other census tracts. It might show hot spots or cold spots for certain tracts while only half the tract is part of the hexagon.  
+
+You may also use this as a space to note: 
+
+* code you want to remember about this assignment
+* analysis tools you want to try with your own data
+* findings that arose during your data exploration that you found interesting
+* or anything else you want to take away from this assignment

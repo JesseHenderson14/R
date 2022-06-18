@@ -1,0 +1,149 @@
+---
+title: "Henderson_Assign07/08"
+author: "Jesse Henderson"
+date: "3/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("E:/GEOG 4870/Assignment_7and8")
+knitr::opts_knit$set(root.dir = "E:/GEOG 4870/Assignment_7and8")
+
+library("ggspatial")
+library(tidyverse)
+theme_set(theme_bw()) #use the bw theme for all ggplot maps
+library(sf)
+library(sp)
+library(tmap)
+library(mapview)
+library(leaflet)
+library(ggplot2)
+library("rnaturalearth")
+library(rgeos)
+library(ggmap)
+library(rgee)
+library(here)
+library(raster)
+library(rgdal)
+library(spatialEco)
+library(foreign)
+library(gdtools)
+library(exactextractr)
+library(fasterize)
+```
+Experimenting with rasters. Mapview and knitting is broken so I commented out all of the mapview commands. 
+
+```{r}
+
+#create raster from .tif file
+cache_usda <- raster("E:/GEOG 4870/Assignment_7and8/CDL_2016_clip_20210301165537_442576959.tif")
+#create raster table from the database file associated with raster file.
+table_cache <- read.dbf("E:/GEOG 4870/Assignment_7and8/CDL_2016_clip_20210301165537_442576959.tif.vat.dbf")
+#rename first column to "ID"
+colnames(table_cache)[1]<-"ID"
+
+plot(cache_usda)
+
+#cache county boundaries/municipalities. 
+cache_boundaries <- st_read("E:/GEOG 4870/Assignment_7and8/Utah_Municipal_Boundaries.shp")
+
+#early examination of shapefile, plot just to see how the polygons are distributed across the state. 
+head(cache_boundaries)
+plot(cache_boundaries)
+
+crs(cache_boundaries)
+crs(cache_usda)
+
+#creating a copy of cache_usda projection
+crscopy <- crs(cache_usda)
+
+#re projecting the copy of the cache_usda to cache_boundaries so they are the same. If they are different, working with them down the line will be difficult as the coordinates will not be in the same locations on each. Almost like trying to use a wrench on a screw, just won't be compatible. 
+cache_boundaries_UTM <- st_transform(cache_boundaries, crs = crscopy)
+
+#03 is cache county ID. These are the municipality boundaries. 
+cache_boundaries_subset <- subset(cache_boundaries_UTM, COUNTYNBR == "03")
+#mapview(cache_boundaries_subset)
+
+#mask and crop the raster using the polygon data
+cache_usda.mask <- mask(cache_usda, cache_boundaries_subset)
+cache_usda.crop <- crop(cache_usda, cache_boundaries_subset)
+
+#showing the raster values using the boundaries. Mask is for the polygons, crop is for the rectangle. 
+#mapview(cache_usda.mask)+mapview(cache_usda.crop)
+
+#creating new columns that are checking the frequency of raster values. Mean doesn't make sense because it is categorical data. 
+cache_boundaries_subset$majorcropmask <- exact_extract(cache_usda.mask, cache_boundaries_subset, "majority")
+cache_boundaries_subset$majorcropcrop <- exact_extract(cache_usda.crop, cache_boundaries_subset, "majority")
+
+plot(cache_usda.mask)
+plot(cache_usda.crop)
+
+#creating histogram variables
+freq.crop <- as.data.frame(freq(cache_usda.crop))
+freq.mask <- as.data.frame(freq(cache_usda.mask))
+
+#plotting the histograms
+ggplot(data = freq.crop) +
+  geom_bar(aes(reorder(value, desc(count)), y = count), stat = "identity") +
+  xlab("Land Use Category") +
+  ylab("Count of Pixels")
+
+ggplot(data = freq.mask) +
+  geom_bar(aes(reorder(value, desc(count)), y = count), stat = "identity") +
+  xlab("Land Use Category") +
+  ylab("Count of Pixels") 
+
+# reclassification values
+# 1 = Yearly Crops, 2 = Urban, 3 = Barren, 4 = Forest, 5 = Shrubland, 6 = Grassland, 7 = Wetlands, 8 = Other/Random Crops, 9 = Other.
+reclassify_df <- c(1, 120, 1,
+                   121, 124, 2,
+                   131, 131, 3,
+                   141, 143, 4,
+                   152, 152, 5,
+                   176, 176, 6,
+                   190, 195, 7,
+                   205, 254, 8,
+                   255, Inf, 9)
+
+#creating a matrix from the data frame above.
+reclass_matrix <- matrix(reclassify_df,
+                         ncol = 3, 
+                         byrow = TRUE)
+
+#reclassify tool does the same thing as the ArcGIS reclassify tool which I used this last week in Advanced GIS. 
+#this is super useful. I'm using crop data for my final project and this is a perfect way to show it using raster data instead of vector data. 
+redone_class <- reclassify(cache_usda.crop, reclass_matrix, right = NA)
+
+#mapview(cache_usda.crop)+mapview(redone_class)
+
+#taking polygon's and turning them into rasters. 
+boundary_raster_crop <- fasterize(cache_boundaries_subset, cache_usda.crop, field = "ENTITYNBR")
+boundary_raster_mask <- fasterize(cache_boundaries_subset, cache_usda.mask, field = "ENTITYNBR")
+
+#mapview(boundary_raster_crop)
+#mapview(boundary_raster_mask)
+```
+
+A bit of my own code. 
+
+```{r}
+#just tried to experiment with things here a little bit. I did most of this experimenting in my final project script. Here's a bit of it. I'll definitely have to work more with this. I can see the potential, but I have been very busy the last week and haven't been able to do as much as I would have liked. 
+#shapefile area of interest (AOI).
+cache_valley_shapefile <- st_read("E:/GEOG 4870/Assignment_7and8/CDL_329203829.shp")
+#creating raster and table variables from USDA data. 
+aoi_raster <- raster("E:/GEOG 4870/Assignment_7and8/CDL_2020_clip_20210314202413_298032761.tif")
+aoi_table <- read.dbf("E:/GEOG 4870/Assignment_7and8/CDL_2020_clip_20210314202413_298032761.tif.vat.dbf")
+
+colnames(aoi_table)[1]<-"ID"
+#mapview(cache_valley_shapefile)
+
+aoi_raster2 <- as.data.frame(aoi_raster)
+
+#I'm not sure why this isn't working. It's giving me an object 'x' not found error which has me confused because the data should have this. 
+#ggplot() +
+  #geom_raster(data = aoi_raster2, aes(x = x, y = y)) + 
+  #coord_quickmap()
+
+```
+
+
